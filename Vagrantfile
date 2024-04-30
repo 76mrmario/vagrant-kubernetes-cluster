@@ -2,6 +2,19 @@
 require "yaml"
 vagrant_root = File.dirname(File.expand_path(__FILE__))
 settings = YAML.load_file "#{vagrant_root}/settings.yaml"
+#dir for controlplane sync
+mkdir data
+$bootstrap = <<-'SCRIPT'
+  echo I am provisioning...
+  date > /etc/vagrant_provisioned_at
+  echo "user anlegen"
+  sudo useradd -m -p $(openssl passwd -1 password) kevin -s /bin/bash --groups sudo
+  su kevin
+  sudo cp -r /home/vagrant/.kube /home/kevin/
+  chmod 777 /home/kevin/config
+  cat /home/kevin/config
+  sudo passwd -l vagrant
+SCRIPT
 
 IP_SECTIONS = settings["network"]["control_ip"].match(/^([0-9.]+\.)([^.]+)$/)
 # First 3 octets including the trailing dot:
@@ -28,7 +41,7 @@ Vagrant.configure("2") do |config|
 
   config.vm.define "controlplane" do |controlplane|
     controlplane.vm.hostname = "controlplane"
-    controlplane.vm.network "private_network", ip: settings["network"]["control_ip"]
+    controlplane.vm.network "public_network", ip: settings["network"]["control_ip"],  bridge: "wlo1"
     if settings["shared_folders"]
       settings["shared_folders"].each do |shared_folder|
         controlplane.vm.synced_folder shared_folder["host_path"], shared_folder["vm_path"]
@@ -58,13 +71,15 @@ Vagrant.configure("2") do |config|
         "SERVICE_CIDR" => settings["network"]["service_cidr"]
       },
       path: "scripts/master.sh"
-  end
+ config.vm.provision "shell", inline: $bootstrap
+ config.vm.synced_folder "../data", "/home/kevin" 
+end
 
   (1..NUM_WORKER_NODES).each do |i|
 
     config.vm.define "node0#{i}" do |node|
       node.vm.hostname = "node0#{i}"
-      node.vm.network "private_network", ip: IP_NW + "#{IP_START + i}"
+      node.vm.network "public_network", ip: IP_NW + "#{IP_START + i}", bridge: "wlo1"
       if settings["shared_folders"]
         settings["shared_folders"].each do |shared_folder|
           node.vm.synced_folder shared_folder["host_path"], shared_folder["vm_path"]
@@ -92,6 +107,7 @@ Vagrant.configure("2") do |config|
       if i == NUM_WORKER_NODES and settings["software"]["dashboard"] and settings["software"]["dashboard"] != ""
         node.vm.provision "shell", path: "scripts/dashboard.sh"
       end
+      config.vm.provision "shell", inline: $bootstrap
     end
 
   end
